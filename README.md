@@ -59,3 +59,7 @@ Para acceder a las rutas protegidas, necesitas enviar un token de autorización 
 ```
 ## Collection Postman 
 TASK_LIST.postman_collection.json
+
+
+## Autor
+- [Edwin Belduma](https://github.com/Edwineverth)
