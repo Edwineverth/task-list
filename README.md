@@ -57,3 +57,5 @@ Para acceder a las rutas protegidas, necesitas enviar un token de autorización 
   "password": "admin"
 }
 ```
+## Collection Postman 
+TASK_LIST.postman_collection.json
