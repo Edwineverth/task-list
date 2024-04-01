@@ -31,4 +31,8 @@ export class RedisService {
   eval(script: string, keys: string[], args: string[]): Promise<any> {
     return this.client.eval(script, keys.length, ...keys, ...args);
   }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
+  }
 }

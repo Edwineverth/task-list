@@ -6,12 +6,13 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { TaskRepository } from './interface/task-repository.interface';
 import { TASK_REPOSITORY } from './constants/task-repository.constant';
 import { Task } from './entities/task.entity';
-import { PaginatedTasksResult } from './dto/task-paginated.dto';
 import { DateRange } from './interface/data-range.interface';
 import { RedisService } from '../provider/redis.provider';
 import { calculateWeeklyRanges } from './utils/calculate-weekly-ranges.util';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import * as console from 'console';
+import { PaginatedTasksResult } from './dto/task-paginated.dto';
 
 @Injectable()
 export class TaskServiceImpl implements TaskService {
@@ -49,39 +50,37 @@ export class TaskServiceImpl implements TaskService {
     return this.taskRepository.findOverdueTasks();
   }
 
+  findTasks(page: number, limit: number): Promise<PaginatedTasksResult> {
+    return this.taskRepository.findTasks(page, limit);
+  }
+
   async triggerCheckOverdueTasks(
     range: DateRange,
     batchId: string,
   ): Promise<void> {
     const results = await this.taskRepository.triggerCheckOverdueTasks(range);
     await this.redisService.set(
-      `${batchId}:${range.start}-${range.end}`,
+      `${batchId}:results:${range.start}-${range.end}`,
       JSON.stringify(results),
     );
 
-    await this.redisService.incr(`${batchId}:completedCount`);
+    await this.redisService.set(
+      `${batchId}:jobCompleted:${range.start}-${range.end}`,
+      'true',
+    );
 
-    const totalJobs = parseInt(
-      await this.redisService.get(`${batchId}:totalJobs`),
-    );
-    const completedJobs = parseInt(
-      await this.redisService.get(`${batchId}:completedCount`),
-    );
+    const totalJobsStr = await this.redisService.get(`${batchId}:totalJobs`);
+    const totalJobs = totalJobsStr ? parseInt(totalJobsStr, 10) : 0;
+
+    const keys = await this.redisService.keys(`${batchId}:jobCompleted:*`);
+    const completedJobs = keys.length;
 
     console.log(`Completed jobs: ${completedJobs}/${totalJobs}`);
 
     if (completedJobs === totalJobs) {
-      const keys = await this.redisService.keys(`${batchId}:results:*`);
-      const resultsPromises = keys.map((key) => this.redisService.get(key));
-      const results = await Promise.all(resultsPromises);
-
-      const allResults = results.flatMap((result) => JSON.parse(result));
-      console.log(`All results for batch ${batchId}:`, allResults);
+      await this.consolidateResults(batchId);
+      await this.cleanupBatch(batchId);
     }
-  }
-
-  async findTasks(page: number, limit: number): Promise<PaginatedTasksResult> {
-    return this.taskRepository.findTasks(page, limit);
   }
 
   async handleCron() {
@@ -115,5 +114,35 @@ export class TaskServiceImpl implements TaskService {
     this.tasksQueue.on('waiting', (jobId) => {
       console.log(`Job ${jobId} is waiting`);
     });
+  }
+  private async cleanupBatch(batchId: string): Promise<void> {
+    const keys = await this.redisService.keys(`${batchId}:*`);
+    for (const key of keys) {
+      await this.redisService.del(key);
+    }
+    console.log(`Cleanup completed for batch ${batchId}.`);
+  }
+
+  private async consolidateResults(batchId: string): Promise<void> {
+    const keysPattern = `${batchId}:results:*`;
+    const keys = await this.redisService.keys(keysPattern);
+
+    if (keys.length === 0) {
+      console.log(`No results found for batchId ${batchId}`);
+      return;
+    }
+
+    const resultsPromises = keys.map((key) => this.redisService.get(key));
+    const serializedResults = await Promise.all(resultsPromises);
+    const results = serializedResults
+      .filter((result) => result !== null)
+      .map((result) => JSON.parse(result));
+
+    const consolidatedResults = [].concat(...results);
+    // TODO: Save consolidated results to a file or database or send SQS or SNS notification
+    console.log(
+      `Consolidated results for batchId ${batchId}:`,
+      consolidatedResults,
+    );
   }
 }
